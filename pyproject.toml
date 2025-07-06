@@ -1,0 +1,34 @@
+[build-system]
+
+requires = ["setuptools >= 64", "cython", "wheel"]
+
+[project]
+
+name = "RTFColorParser"
+description = "Extract colored text from RTF files"
+version = "0.1.0"
+readme  = "README.md"
+authors = [
+  {name = "Andreas Paepcke", email = "paepcke@cs.stanford.edu"}
+  ]
+maintainers = [
+  {name = "Andreas Paepcke", email = "paepcke@cs.stanford.edu"}
+  ]
+license = {text = "MIT License"}
+
+dependencies = [
+    "striprtf>=0.0.29"
+    ]
+requires-python = ">= 3.11"
+
+# The following establishes the <proj-root>/back_end/src
+# as the root of all Python packages:
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.urls]
+
+# Homepage = "https://github.com/paepcke/therapist"
+# Documentation = "https://github.com/paepcke/therapist"
+Repository = "https://github.com/paepcke/rtf-text-color-parser.git"
+
