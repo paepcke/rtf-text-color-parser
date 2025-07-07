@@ -4,7 +4,7 @@
  # @Date:   2025-07-04 19:24:58
  # @File:   /Users/paepcke/VSCodeWorkspaces/rtf-text-color-parser/src/parser/rtf_color_parser.py
  # @Last Modified by:   Andreas Paepcke
- # @Last Modified time: 2025-07-05 18:59:22
+ # @Last Modified time: 2025-07-07 12:52:15
  #
  # **********************************************************
 
@@ -32,16 +32,34 @@ class RTFParser:
     Fred: I'm looking for my glasses.
     Susie: They are on your head
 
-    This facility finds and parses the color table inside the file.
-    It accepts a tag map from the caller in the constructor:
+    This facility first finds and parses the color table inside the file.
+    The result is an RTF color table of the form:
+       {1: 'RGB(20,156,20)',
+        2: 'RGB(1,35,60)',
+             ...
+       }
+    where the keys correspond to the \cf<int> tags in the RTF file.
+
+    The constructor accepts a tagmap from the caller:
 
        {'RGB(255,0,0)'   : 'Fred',
         'RGB(11,93,162)' : 'Susie
        }
 
-    If no tag map is provided, the facility is still useful for separating
+    The two tables together enable the final 'movie script'.
+
+    If no tagmap is provided, the facility is still useful for separating
     differently colored text each into its own paragraph.
     '''
+
+    # Define unlikely characters for RTF
+    UNLIKELY_CHARS = [
+        '\x00',  # null character
+        '\x01',  # SOH - Start of Heading
+        '\x02',  # STX - Start of Text
+        '\x03',  # ETX - End of Text
+        '\x04',  # EOT - End of Transmission
+    ]    
 
     #------------------------------------
     # Constructor
@@ -62,7 +80,18 @@ class RTFParser:
         # directly
         if is_unittest:
             return
-            
+
+        # Clients way to check whether conversion was
+        # successful
+        self.success = False
+
+        # Check the given tagmap.
+        try:
+            res = self.check_tagmap(tagmap)
+        except ValueError as e:
+            print(f"Bad tagmap dict: {e.message}")
+            return
+
         # Get a big string that is the file:
         try:
             with open(fname, 'r') as fd:
@@ -71,70 +100,231 @@ class RTFParser:
             print(f"File {fname} cannot be found or read: {e}")
             return
 
-        # The following will print an error to console,
-        # and leave the program
-        try:
-            res = self.check_tagmap(tagmap)
-        except ValueError as e:
-            print(f"Bad tagmap dict: {e.message}")
-            return
         # Extract the RTF color table from the RTF string:
         #   {1 : 'RGB(24,20,105')'
         #    2 : 'RGB(1,204,105')
         #         ...
         #   }
-        rtf_color_dict = self.make_color_tbl(rtf_content)
+        try:
+            rtf_color_dict = self.make_color_tbl(rtf_content)
+        except Exception as e:
+            print(f"Failed: {e}")
+            return
 
-        # Get set of all RTF control sequences used in the text,
-        # so we can remove all but the color specs:
-        control_pattern = r'\\[a-zA-Z]+\d*|\\\S'
-        rtf_controls = set(re.findall(control_pattern, rtf_content))
-        # We have to retain the \cf color controls:
-        rtf_controls.remove('\\cf')
+        # Pick a character we can use to protect RTF
+        # color tags in the text (\cf<int>) from RTF removal.
+        self.color_tag_marker_char = None
+        for char_candidate in self.UNLIKELY_CHARS:
+            if re.search(char_candidate, rtf_content) is None:
+                self.color_tag_marker_char = char_candidate
+                break
+        if self.color_tag_marker_char is None:
+            print("Cannot find safe text marker char in RTF content")
+            return
 
-        clean_rtf = self.remove_rtf_controls(rtf_content, rtf_controls)
-
-        self.output_txt_script(clean_rtf, rtf_color_dict, tagmap)
+        try:
+            self.success = self.output_txt_script(rtf_content, rtf_color_dict, tagmap)
+        except Exception as e:
+            print(f"Failed in final phase: {e}")
+            return
+        
+        self.success = True
+            
 
     #------------------------------------
     # output_txt_script
     #-------------------
 
-    def output_txt_script(self, rtf_content, rtf_color_dict, tagmap):
+    def output_txt_script(
+            self, 
+            rtf_content, 
+            rtf_color_dict, 
+            tagmap,
+            collect_output=False
+            ):
         '''
-        Output line JSON to stdout. Like:
+        Given RTF text that has been cleaned of all
+        RTF tags, except for RTF color tags (such as '\\cf3'),
+        print line JSON to stdout. Like:
+
            {"Fred"  : "I said this"}
            {"Susie} : "I said that"}
+
+        Line json (jsonl) are correct JSON objects individually, 
+        but the entire output taken together is not JSON, because
+        there is no array or object wrapper.
+
+        Alternatively, if collect_output is set to True,
+        no printing, and an array of jsonl objects is returned.
+
+        Inputs:
+           o rtf_color_dict: maps RTF color numbers to 
+             RGB colors: 
+                {1 : 'RGB(2,40,156)',
+                 2 : 'RGB(60,20,25)',
+                      ...
+                }
+
+           o tagmap maps colors to human readable 
+             'movie script' text tags:
+
+                { 
+                  'RGB(2,40,156)': 'Fred,
+                  'RGB(60,20,25)': 'Susie
+                     ...
+                }
 
         :param rtf_content: the content of the RTF file with colored roles
         :type rtf_content: str
         :param rtf_color_dict: dict mapping RTF color tags to RGB colors,
-            such as {"cf2" : "RGB(23, 20, 103)", ...}
+            such as {"cf2" : "RGB(23,20,103)", ...}
         :type rtf_color_dict: Dict[str,str]
         :param tagmap: map from color to role tag, like:
             {"RGB(23,20,103)" : "Fred", ...}
         :type tagmap: Dict[str,str]
+        :param collect_output: whether to print jsonl, or return
+            an array of the jsonl objects. Default: print
+        :type collect_output: bool
+        :raises ValueError if anything goes wrong
         '''
-        json_objs = []
-        cur_jsonl = {}
-        cur_idx = 0
-        plain_txt_start = None
+        jsonl_objs = []
 
-        while (span_and_color_dict := self._next_rtf_color_tag_idx(rtf_content[cur_idx:])):
+        # Replace the opening backslashes of RTF color
+        # tags in the RTF text with a different char that
+        # does not otherwise occur in the text (as verified
+        # in the constructor):
+        color_tag_gen = self.color_tag_gen(rtf_content, rtf_color_dict)
+        # For each tag, look up the 'movie-script' name, 
+        # and save it in order of occurrence:
+        names = []
+
+        for tag_info in color_tag_gen:
+            backslash_pos = tag_info['tag_start']
+            # Replace the backslash with our marker
+            # char to protect the RTF color tag from
+            # later removal of RTF control seqs:
+            rtf_content = rtf_content[:backslash_pos - 1] \
+                        + self.color_tag_marker_char \
+                        + rtf_content[backslash_pos+1:]
+            try:
+                name = tagmap[tag_info['rgb_str']]
+            except KeyError:
+                bad_pos = tag_info['tag_start']
+                bad_color = tag_info['rgb_str']
+                msg = (f"Color spec at RTF txt pos {bad_pos} is {bad_color}, " 
+                       f"which is not found in tagmap {tagmap}")
+                raise ValueError(msg)
+            names.append(name)
+
+        # Next, clean out all RTF from the text. This
+        # won't include the modified \cf<int> color tags,
+        # b/c we replaced the backslash:
+        clean_txt = rtf_to_text(rtf_content)
+
+        # Now remove the RTF tags, and build the jsonl
+        # objects as we go:
+        idx = 0
+        cur_name = ''
+        while True:
+            nxt_tag_match = re.search(self.color_tag_marker_char, clean_txt[idx:])
+            if nxt_tag_match is None:
+                break
+            tag_start, tag_end = nxt_tag_match.span()
+            jsonl_obj = {cur_name : clean_txt[idx:tag_start]}
+            jsonl_objs.append(jsonl_obj)
+            if not collect_output:
+                print(jsonl_obj)
+            idx += tag_end
+
+        # All done, except for last bit of text after the 
+        # last color spec:
+        last_jsonl_obj = {cur_name: clean_txt[idx:]}
+        jsonl_objs.append(last_jsonl_obj)
+
+        if collect_output:
+            return jsonl_objs
+        else:
+            print(last_jsonl_obj)
+        return True
+
+    #------------------------------------
+    # color_tag_gen
+    #-------------------
+
+    def color_tag_gen(self, rtf_txt, rtf_color_dict):
+        '''
+        On the first call, returns a generator that on 
+        subsequent calls returns successive dicts with 
+        RTF color tags in given RTF text. 
+        Each dict contains:
+
+          {
+            'tag_start' : <int>,
+            'tag_len'   : <int>,
+            'rgb_str    : <int>
+          }
+
+        The rtf_color_dict is a map from RTF color tag
+        ints to RGB color texts, like:
+
+          {2: 'RGB(24,103,40)',
+           4: 'RGB(100,230,1)'
+            ...
+          }
+
+        :param rtf_txt: rtf_txt over which the iterator
+            will scan
+        :type rtf_txt: str
+        :param rtf_color_dict: map from RTF color tag number
+            to RGB string 
+        :type rtf_color_dict: Dict[int, str]
+        :raises ValueError: for any error that occurs
+        :yield: a dict describing the next RTF color tag
+        :rtype: Dict[str, int]
+        '''
+
+        new_end = 0
+        while (span_and_color_dict := 
+               self._next_rtf_color_tag_idx(
+                   rtf_txt[new_end:])):
+            tag_start = new_end + span_and_color_dict['tag_start']
             tag_len   = span_and_color_dict['tag_len']
             color_num = span_and_color_dict['color_num']
-            txt_tag = tagmap[color_num]
-            if plain_txt_start is not None:
-                cur_jsonl[txt_tag] = rtf_color_dict[plain_txt_start:cur_idx]
-                json_objs.append(cur_jsonl)
-                cur_jsonl = {}
-            else:
-                # First segment of plain text:
-                cur_jsonl[txt_tag] = ''
-                plain_txt_start = cur_idx + tag_len
-            cur_idx += tag_len
+            # Which RGB string is the found RTF color number?
+            try:
+                rgb_str = rtf_color_dict[color_num]
+            except KeyError:
+                msg = f"Cannot find RGB string from RTF color number {color_num}: "
+                raise ValueError(msg)
+            
+            # Pt to just before the next color tag,
+            # that is where the text of the current
+            # color ends:
+            new_end += tag_start + tag_len
+            yield {
+                'tag_start': tag_start,
+                'tag_len'  : tag_len,
+                'rgb_str'  : rgb_str
+            }
+        # Will call StopIteration automatically
+        return
 
-        return json_objs
+    #------------------------------------
+    # find_rtf_controls
+    #-------------------
+
+    def find_rtf_controls(self, rtf_content):
+        '''
+        Given RTF content, return a set of control
+        characters, such as '\cf3' or '\i'
+
+        :param rtf_content: RTF content to examen
+        :type rtf_content: str
+        :returns a set of control strings
+        '''
+        control_pattern = r'\\[a-zA-Z]+\d*|\\\S'
+        rtf_controls = set(re.findall(control_pattern, rtf_content))
+        return rtf_controls
 
     #------------------------------------
     # remove_rtf_controls
@@ -142,7 +332,7 @@ class RTFParser:
 
     def remove_rtf_controls(self, rtf_txt, controls_set):
         '''
-        Given an RTF string, remove all the control sequences
+        Given an RTF string, remove all the given control sequences
         and return a new string with the sequences removed.
 
         Example controls_set: set(['\\i', '\\cb'])
@@ -160,26 +350,123 @@ class RTFParser:
         return re.sub(pattern, '', rtf_txt)        
 
     #------------------------------------
+    # rm_color_cntls_from_set
+    #-------------------
+
+    def rm_color_cntls_from_set(self, rtf_ctrl_set):
+        '''
+        Given a set of RTF control chars, find all color
+        controls, and remove them from the set. Color
+        controls are \cf<int>
+
+        :param rtf_ctrl_set: set to be culled
+        :type rtf_ctrl_set: set[str]
+        :return: culled rtf_ctrl_set
+        :rtype: set[str]
+        '''
+        pat = r"\\cf[\d]+"
+        remaining_set = set(filter(lambda cntrl: not re.search(pat, cntrl), rtf_ctrl_set))
+        return remaining_set
+
+    #------------------------------------
+    # remove_rtf_header
+    #-------------------
+
+    def remove_rtf_header(self, content):
+        '''
+        Removes the RTF header to best effort. We do 
+        it by finding particular tables, which reside in the 
+        header. Some control chars may be left of the header,
+        but we will filter them later, as long as they 
+        start with a backslash.
+
+        NOTE: This removes the color table. So call this
+              *after* parsing the color table in make_color_tbl()
+
+        :param content: RTF text to rid of header tables
+        :type content: str
+        :returns new string with tables removed
+        :rtype string
+        '''
+        # Remove complete table blocks including opening braces
+        content = re.sub(r'\{\\fonttbl[^}]*\}', '', content)
+        content = re.sub(r'\{\\colortbl[^}]*\}', '', content)  
+        content = re.sub(r'\{\\\*\\expandedcolortbl[^}]*\}', '', content)
+        content = re.sub(r'\{\\stylesheet[^}]*\}', '', content)
+        content = re.sub(r'\{\\listtable[^}]*\}', '', content)
+        content = re.sub(r'\{\\cocoaplatform0\{[^}]*\}', 
+                         r'\\cocoaplatform0', 
+                         content)
+        return content
+
+    #------------------------------------
+    # clean_rtf
+    #-------------------
+
+    def clean_rtf(self, dirty_rtf):
+        '''
+        Given an RTF string, remove all RTF tags, other
+        than color tags (like '\\cf2')
+
+        :param dirty_rtf: RTF text to clean
+        :type dirty_rtf: str
+        :return: new, clean string
+        :rtype: str
+        '''
+
+        # Get rid of header info as best as possible, because
+        # its tables have controls that do not start with 
+        # backslashes:
+
+        dirty_rtf = self.remove_rtf_header(dirty_rtf)
+
+        # Get set of all RTF control sequences used in 
+        # remaining text, so we can remove all but the 
+        # color specs:
+        rtf_controls = self.find_rtf_controls(dirty_rtf)
+        # Retain the \cf color controls:
+        rtf_controls = self.rm_color_cntls_from_set(rtf_controls)
+        clean_rtf = self.remove_rtf_controls(dirty_rtf, rtf_controls)
+        return clean_rtf
+
+    #------------------------------------
     # _next_rtf_color_tag_idx
     #-------------------    
 
     def _next_rtf_color_tag_idx(self, rtf_str):
-        match = re.search(r'\\\\cf(\d)', rtf_str)
+        '''
+        Given an RTF string, find the next RTF control
+        tag that designates a color. Return a dict:
+           {"tag_start" : <int>,
+            "tag_len"   : <int>,
+            "color_num" : <int>
+            }
+
+        :param rtf_str: RTF string to examine
+        :type rtf_str: str
+        :raises ValueError: for malformed color tag
+        :return: dict describing the next tag
+        :rtype: Dict[str, int]
+        '''
+        match = re.search(r'\\cf([\d]*)', rtf_str)
         if not match:
             return None
-        # Got a match of somthind like '\cf2', with
+        # Got a match of somthing like '\cf2', with
         # group 1 being '2':
         try:
-            color_num = int(match.group[1])
-            return {"tag_len" : len(match[0]),
-                    "color_num" : color_num
+            color_num = int(match[1])
+            return {"tag_start": match.span()[0],
+                    "tag_len"  : len(match[0]),
+                    "color_num": color_num
                     }
         except IndexError:
             # Match did not have a number after the \cf
-            raise ValueError(f"Found '{match[0]}' in RTF, but this does not end with a number")
+            msg = f"Found '{match[0]}' in RTF, but this does not end with a number"
+            raise ValueError(msg)
         except ValueError:
             # Group 1 existed, but is not an int:
-            raise ValueError(f"Found '{match[0]}' in RTF, which does not end with a proper integer")
+            msg = f"Found '{match[0]}' in RTF, which does not end with a proper integer"
+            raise ValueError(msg)
         
     #------------------------------------
     # _plain_text_start
@@ -199,21 +486,20 @@ class RTFParser:
     def check_tagmap(self, tagmap):
         '''
         Ensure that tagmap properly maps string tag names
-        to legal RGB values. Return True if OK, else False.
-        Print error message if fault is found
+        to legal RGB values. Return True if OK, else ValueError
 
         :param tagmap: the map to be checked
         :type tagmap: Dict[str, str]
-        :return: a True or False, depending on the test outcome
+        :return: a True if OK, else error
         :rtype: boolean
+        :raises: ValueError for format errors
         '''
         if len(tagmap) == 0:
              return True
         # All keys must be strings:
         for key, rgb in tagmap.items():
             if type(key) != str:
-                print(f"Tabmap keys must be strings, not {key}")
-                return False
+                raise ValueError(f"Tabmap keys must be strings, not {key}")
             # Values must be of the form
             # 'RGB(<int>,<int>,<int>,[float])' with <int> between 0 and 255,
             #                                  and the float being 0 to 1, or
@@ -228,7 +514,7 @@ class RTFParser:
     # validate_rgb_string
     #-------------------
 
-    def validate_rgb_string(rgb_string):
+    def validate_rgb_string(self, rgb_string):
         '''
         Checks if a given string conforms to the RGB(int,int,int) format
         with integers between 0 and 255, tolerant of spaces after commas.
@@ -278,7 +564,7 @@ class RTFParser:
     # validate_rgb_hex_string
     #-------------------
 
-    def validate_rgb_hex_string(hex_string):
+    def validate_rgb_hex_string(self, hex_string):
         '''
         Checks if a given string conforms to the #RRGGBB hexadecimal format.
         If failure, raises ValueError
@@ -351,8 +637,10 @@ class RTFParser:
         color_entries = re.findall(r'\\red(\d+)\\green(\d+)\\blue(\d+);', color_table)
         for i, (r, g, b) in enumerate(color_entries):
             # Creat color table entries like:
-            #    {3 : (10,40,200)}
-            colors[i] = (int(r), int(g), int(b))
+            #    {3 : 'RGB(10,40,200)'}
+            # The i+1 is because RTF color tables and tags
+            # are 1-origin:
+            colors[i+1] = f"RGB({int(r)},{int(g)},{int(b)})"
         
         return colors        
         
