@@ -4,7 +4,7 @@
  # @Date:   2025-07-05 14:07:41
  # @File:   /Users/paepcke/VSCodeWorkspaces/rtf-text-color-parser/src/parser/__tests__/test_rtf_color_par.py
  # @Last Modified by:   Andreas Paepcke
- # @Last Modified time: 2025-07-07 11:56:26
+ # @Last Modified time: 2025-07-08 12:45:22
  #
  # **********************************************************
 
@@ -194,6 +194,20 @@ class RTFColorParserTester(unittest.TestCase):
         # Should throw StopIteration:
         with self.assertRaises(StopIteration):
             next(tag_gen)
+
+        # Now longer txt:
+        rtf_txt = "{\\rtf1\\ansi\\ansicpg1252\\cocoartf2822\n\\cocoatextscaling0\\cocoaplatform0{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;\\f1\\fswiss\\fcharset0 ArialMT;}\n{\\colortbl;\\red255\\green255\\blue255;\\red74\\green21\\blue148;\\red255\\green255\\blue255;\\red11\\green93\\blue162;\n\\red26\\green26\\blue26;}\n{\\*\\expandedcolortbl;;\\cssrgb\\c36863\\c17255\\c64706;\\cssrgb\\c100000\\c100000\\c100000;\\cssrgb\\c0\\c44706\\c69804;\n\\cssrgb\\c13333\\c13333\\c13333;}\n\\margl1440\\margr1440\n\\deftab720\n\\pard\\pardeftab720\\partightenfactor0\n\n\\f0\\fs32 \\cf2 \\cb3 \\up0 \\nosupersub \\ulnone What risks do you run?\\\n\\pard\\pardeftab720\\partightenfactor0\n\\cf4 In ISTDP, we want to ensure will.\\\n\\\n\\cf4 That's a thoughtful approach.\n\\cf2 I want that too.\\\n           }\n"
+        tag_gen = self.parser.color_tag_gen(rtf_txt, self.rtf_color_dict)
+        # Expected
+        exp_starts    = [492,588,630,665]
+        exp_rgb_strs  = ['RGB(74,21,148)',
+                         'RGB(11,93,162)', 
+                         'RGB(11,93,162)', 
+                         'RGB(74,21,148)']
+        
+        for i, tag_info in enumerate(tag_gen):
+            self.assertEqual(tag_info['tag_start'], exp_starts[i])
+            self.assertEqual(tag_info['rgb_str'], exp_rgb_strs[i])
                                                         
     #------------------------------------
     # test_clean_rtf
@@ -218,7 +232,12 @@ class RTFColorParserTester(unittest.TestCase):
             self.tagmap,
             collect_output=True
         )
-        print(jsonl_arr)
+        expected = [{'Expert': 'What risks do you run?\n'},
+                    {'AI': 'In ISTDP, we want to ensure will.\n\n'},
+                    {'AI': "That's a thoughtful approach."},
+                    {'Expert': 'I want that too.\n           '}
+                    ]
+        self.assertListEqual(jsonl_arr, expected)
 
 # ------------- Utilities ------------
 

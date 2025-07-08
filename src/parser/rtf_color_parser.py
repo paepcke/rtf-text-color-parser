@@ -4,7 +4,7 @@
  # @Date:   2025-07-04 19:24:58
  # @File:   /Users/paepcke/VSCodeWorkspaces/rtf-text-color-parser/src/parser/rtf_color_parser.py
  # @Last Modified by:   Andreas Paepcke
- # @Last Modified time: 2025-07-07 12:52:15
+ # @Last Modified time: 2025-07-08 12:49:10
  #
  # **********************************************************
 
@@ -196,56 +196,85 @@ class RTFParser:
         color_tag_gen = self.color_tag_gen(rtf_content, rtf_color_dict)
         # For each tag, look up the 'movie-script' name, 
         # and save it in order of occurrence:
-        names = []
+        tags_info = []
 
+        # Gather info about the color sections.
+        # The tags_info array will contain dicts
+        # with info about tag_start, and 'movie-script'
+        # name:
         for tag_info in color_tag_gen:
-            backslash_pos = tag_info['tag_start']
-            # Replace the backslash with our marker
-            # char to protect the RTF color tag from
-            # later removal of RTF control seqs:
-            rtf_content = rtf_content[:backslash_pos - 1] \
-                        + self.color_tag_marker_char \
-                        + rtf_content[backslash_pos+1:]
             try:
                 name = tagmap[tag_info['rgb_str']]
+                tag_info['name'] = name
             except KeyError:
                 bad_pos = tag_info['tag_start']
                 bad_color = tag_info['rgb_str']
                 msg = (f"Color spec at RTF txt pos {bad_pos} is {bad_color}, " 
                        f"which is not found in tagmap {tagmap}")
                 raise ValueError(msg)
-            names.append(name)
+            # Remember info about this tag:
+            tags_info.append(tag_info)
+
+        # Replace the backslashes of color tags with
+        # a special char (which we identified in the 
+        # constructor):
+
+        protected_rtf = re.sub(r'\\cf(\d+)', '\x00cf\\1', rtf_content)
 
         # Next, clean out all RTF from the text. This
         # won't include the modified \cf<int> color tags,
         # b/c we replaced the backslash:
-        clean_txt = rtf_to_text(rtf_content)
+        clean_txt = rtf_to_text(protected_rtf)
 
-        # Now remove the RTF tags, and build the jsonl
-        # objects as we go:
+        # Now remove the remaining pseudo RTF color tags, 
+        # and build the jsonl objects as we go:
         idx = 0
-        cur_name = ''
-        while True:
-            nxt_tag_match = re.search(self.color_tag_marker_char, clean_txt[idx:])
-            if nxt_tag_match is None:
-                break
-            tag_start, tag_end = nxt_tag_match.span()
-            jsonl_obj = {cur_name : clean_txt[idx:tag_start]}
-            jsonl_objs.append(jsonl_obj)
-            if not collect_output:
+        # Default color: black
+        cur_color = 'RGB(0,0,0)'
+        try:
+            cur_name = tagmap[cur_color]
+        except KeyError:
+            cur_name = ''
+        # Pattern to find the protected color tags:
+        tag_pat = '\x00cf(\\d+)'
+        color_place_iter = re.finditer(tag_pat, clean_txt)
+        for i, nxt_tag_match in enumerate(color_place_iter):
+            tag_start = nxt_tag_match.start()
+            # Color control seqs end in space, the backslash of
+            # another control seq, a group-associated brace,
+            # or the end of the text. We eliminated all but
+            # the trailing space; remove that:
+            if clean_txt[idx] == ' ':
+                txt = clean_txt[idx+1:tag_start]
+            else:
+                txt = clean_txt[idx:tag_start]
+            idx = tag_start + len(nxt_tag_match.group())
+
+            if len(txt) == 0:
+                # Usually happens when color spec
+                # are the first chars of the cleaned
+                # txt. Update the 'movie-script' name:
+                cur_name = tags_info[i]['name']
+                continue
+            jsonl_obj = {cur_name : txt}
+            cur_name = tags_info[i]['name']
+            if collect_output:
+                jsonl_objs.append(jsonl_obj)
+            else:
                 print(jsonl_obj)
-            idx += tag_end
 
         # All done, except for last bit of text after the 
         # last color spec:
-        last_jsonl_obj = {cur_name: clean_txt[idx:]}
-        jsonl_objs.append(last_jsonl_obj)
-
+        if clean_txt[idx] == ' ':
+            last_jsonl_obj = {cur_name: clean_txt[idx+1:]}
+        else:
+            last_jsonl_obj = {cur_name: clean_txt[idx:]}
         if collect_output:
+            jsonl_objs.append(last_jsonl_obj)
             return jsonl_objs
         else:
             print(last_jsonl_obj)
-        return True
+            return True
 
     #------------------------------------
     # color_tag_gen
@@ -300,7 +329,7 @@ class RTFParser:
             # Pt to just before the next color tag,
             # that is where the text of the current
             # color ends:
-            new_end += tag_start + tag_len
+            new_end = tag_start + tag_len
             yield {
                 'tag_start': tag_start,
                 'tag_len'  : tag_len,
@@ -509,6 +538,9 @@ class RTFParser:
                 return self.validate_rgb_string(rgb)
             elif rgb.startswith('#'):
                 return self.validate_rgb_hex_string(rgb)
+            
+        # We haven't bombed out, so:
+        return True
 
     #------------------------------------
     # validate_rgb_string
