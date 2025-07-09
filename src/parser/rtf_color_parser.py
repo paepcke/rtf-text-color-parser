@@ -1,10 +1,11 @@
+#!/usr/bin/env python
  # **********************************************************
  #
  # @Author: Andreas Paepcke
  # @Date:   2025-07-04 19:24:58
  # @File:   /Users/paepcke/VSCodeWorkspaces/rtf-text-color-parser/src/parser/rtf_color_parser.py
  # @Last Modified by:   Andreas Paepcke
- # @Last Modified time: 2025-07-08 12:49:10
+ # @Last Modified time: 2025-07-09 11:33:51
  #
  # **********************************************************
 
@@ -16,9 +17,9 @@ import re
 
 # Example of RTF material being processed here:
 #        ...
-#      {\colortbl;\red255\green0\blue0;\red11\green93\blue162;
-#        \cf1 I'm looking for my glasses.
-#        \cf2 They are on your head
+#      {\\colortbl;\\red255\\green0\\blue0;\\red11\\green93\\blue162;
+#        \\cf1 I'm looking for my glasses.
+#        \\cf2 They are on your head
 #        ...
   
 class RTFParser:
@@ -38,7 +39,7 @@ class RTFParser:
         2: 'RGB(1,35,60)',
              ...
        }
-    where the keys correspond to the \cf<int> tags in the RTF file.
+    where the keys correspond to the \\cf<int> tags in the RTF file.
 
     The constructor accepts a tagmap from the caller:
 
@@ -65,15 +66,24 @@ class RTFParser:
     # Constructor
     #-------------------    
 
-    def __init__(self, fname, tagmap={}, is_unittest=False):
+    def __init__(self, fname, tagmap={}, collect_output=False, is_unittest=False):
         '''
         Given an RTF file, and a mapping from RGB colors to 
-        script names, generate a script file.
+        script names, generate a script file. Callers have a 
+        choice whether the final instance variable will contain
+        a list of jsonl conversation turn objects, or simply 
+        True/False for success. If collect_output is False, the
+        jsonl objects are written to stdout as they are created.
 
         :param fname: full path to RTF file
         :type fname: string
-        :param colortags: map from RGB specs to text tags, defaults to {}
-        :type colortags: Dict[str, str], optional
+        :param tagmap: map from RGB specs to 'movie-script' tags, defaults to {}
+        :type tagmap: Dict[str, str], optional
+        :param collect_output: if True, the instance will 
+        :type collect_output: bool
+        :param is_unittest: if set to True, the constructor takes no
+            action other than creating the RTFParser instance.
+        :type is_unittest: bool
         '''
 
         # Allow unittests to call service methods
@@ -123,13 +133,15 @@ class RTFParser:
             return
 
         try:
-            self.success = self.output_txt_script(rtf_content, rtf_color_dict, tagmap)
+            self.res = self.output_txt_script(
+                rtf_content, 
+                rtf_color_dict, 
+                tagmap,
+                collect_output=collect_output)
         except Exception as e:
             print(f"Failed in final phase: {e}")
             return
         
-        self.success = True
-            
 
     #------------------------------------
     # output_txt_script
@@ -256,6 +268,13 @@ class RTFParser:
                 # txt. Update the 'movie-script' name:
                 cur_name = tags_info[i]['name']
                 continue
+
+            # Remove non-printable chars, which will be
+            # like '\xyz  with yz being two hex digits:
+            #*******clean_txt = re.sub(r'[^\x20-\x7E]', '', clean_txt)
+            #*******clean_txt = re.sub(r'[\x00-\x1F\x7F]', '', clean_txt)
+            #*******clean_txt = re.sub("'\xa0", '', clean_txt)
+
             jsonl_obj = {cur_name : txt}
             cur_name = tags_info[i]['name']
             if collect_output:
@@ -345,7 +364,7 @@ class RTFParser:
     def find_rtf_controls(self, rtf_content):
         '''
         Given RTF content, return a set of control
-        characters, such as '\cf3' or '\i'
+        characters, such as '\\cf3' or '\\i'
 
         :param rtf_content: RTF content to examen
         :type rtf_content: str
@@ -386,7 +405,7 @@ class RTFParser:
         '''
         Given a set of RTF control chars, find all color
         controls, and remove them from the set. Color
-        controls are \cf<int>
+        controls are \\cf<int>
 
         :param rtf_ctrl_set: set to be culled
         :type rtf_ctrl_set: set[str]
