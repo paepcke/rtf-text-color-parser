@@ -13,7 +13,7 @@
     "python.testing.unittestArgs": [
         "-v",
         "-s", // Specifies the start directory for test discovery
-        "./parser/tests", // Path from the VS Code workspace root (which is 'src') to your tests directory
+        "./parser/", // Path from the VS Code workspace root (which is 'src') to your tests directory
         "-p", // Specifies the pattern for test files
         "test*.py"
     ],
