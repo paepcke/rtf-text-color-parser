@@ -5,7 +5,7 @@
  # @Date:   2025-07-04 19:24:58
  # @File:   /Users/paepcke/VSCodeWorkspaces/rtf-text-color-parser/src/parser/rtf_color_parser.py
  # @Last Modified by:   Andreas Paepcke
- # @Last Modified time: 2025-07-09 11:33:51
+ # @Last Modified time: 2025-07-09 14:43:25
  #
  # **********************************************************
 
@@ -70,10 +70,12 @@ class RTFParser:
         '''
         Given an RTF file, and a mapping from RGB colors to 
         script names, generate a script file. Callers have a 
-        choice whether the final instance variable will contain
-        a list of jsonl conversation turn objects, or simply 
-        True/False for success. If collect_output is False, the
-        jsonl objects are written to stdout as they are created.
+        choice whether the final instance variable json_objs
+        will contain a list of jsonl conversation turn objects
+        or simply True/False for success. 
+
+        If collect_output is False, the jsonl objects are written 
+        to stdout as they are created.
 
         :param fname: full path to RTF file
         :type fname: string
@@ -133,7 +135,7 @@ class RTFParser:
             return
 
         try:
-            self.res = self.output_txt_script(
+            self.jsonl_objs = self.output_txt_script(
                 rtf_content, 
                 rtf_color_dict, 
                 tagmap,

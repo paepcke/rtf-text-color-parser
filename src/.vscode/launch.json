@@ -9,8 +9,12 @@
             "justMyCode":true,
             "console": "integratedTerminal",
             "env": {
-                "PYTHONPATH": "/Users/paepcke/VSCodeWorkspaces/therapist/src/:${env:PYTHONPATH}"
+                "PYTHONPATH": "${workspaceFolder}/src/:${env:PYTHONPATH}"
             },
+            "args": ["--jsonl_dir", "${HOME}/Project/TherapistTrainer/JonFredericksonCorrections/JSONLVersions/",
+                     "--outfile", "${HOME}/Project/TherapistTrainer/JonFredericksonCorrections/JSONLVersions/discussion.json",
+                     "${HOME}/Project/TherapistTrainer/JonFredericksonCorrections/RTFVersions"
+                     ]
         },
         {
             "type": "node",

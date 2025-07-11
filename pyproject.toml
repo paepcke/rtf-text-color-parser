@@ -17,7 +17,8 @@ maintainers = [
 license = {text = "MIT License"}
 
 dependencies = [
-    "striprtf>=0.0.29"
+    "striprtf>=0.0.29",
+    "jsonlines>=4.0.0"
     ]
 requires-python = ">= 3.11"
 
